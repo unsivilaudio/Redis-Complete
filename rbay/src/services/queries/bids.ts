@@ -1,12 +1,11 @@
 import type { CreateBidAttrs, Bid } from '$services/types';
 import { bidHistoryKey, itemsKey, itemsByPriceKey } from '$services/keys';
-import { client } from '$services/redis';
+import { client, withLock } from '$services/redis';
 import { DateTime } from 'luxon';
 import { getItem } from './items';
 
 export const createBid = async (attrs: CreateBidAttrs) => {
-	return client.executeIsolated(async (isolatedClient) => {
-		await isolatedClient.watch(itemsKey(attrs.itemId));
+	return withLock(attrs.itemId, async (lockedClient: typeof client, signal: any) => {
 		const item = await getItem(attrs.itemId);
 		if (!item) throw new Error('Item does not exist!');
 		if (item.price >= attrs.amount) throw new Error('Bid too low.');
@@ -15,19 +14,22 @@ export const createBid = async (attrs: CreateBidAttrs) => {
 
 		const serialized = serializeHistory(attrs.amount, attrs.createdAt.toMillis());
 
-		return isolatedClient
-			.multi()
-			.rPush(bidHistoryKey(attrs.itemId), serialized)
-			.hSet(itemsKey(item.id), {
+		if (signal.expired) {
+			throw new Error('Lock expired, must abort operation.');
+		}
+
+		return Promise.all([
+			lockedClient.rPush(bidHistoryKey(attrs.itemId), serialized),
+			lockedClient.hSet(itemsKey(item.id), {
 				bids: item.bids + 1,
 				price: attrs.amount,
 				highestBigUserId: attrs.userId
-			})
-			.zAdd(itemsByPriceKey(), {
+			}),
+			lockedClient.zAdd(itemsByPriceKey(), {
 				value: item.id,
 				score: attrs.amount
 			})
-			.exec();
+		]);
 	});
 };
 
