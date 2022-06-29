@@ -12,7 +12,7 @@ const client = createClient({
 		unlock: defineScript({
 			NUMBER_OF_KEYS: 1,
 			SCRIPT: `
-                if redis.call('GET', KEYS[1] == ARGV[1]) then
+                if redis.call('GET', KEYS[1]) == ARGV[1] then
                     redis.call('DEL', KEYS[1])
                 end
             `,
